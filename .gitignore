@@ -1,2 +1,5 @@
 *.asv
 test.m
+
+.DS_Store
+.config
