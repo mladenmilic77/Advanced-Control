@@ -42,11 +42,11 @@ classdef DCMotor < handle
         Ts % Sampling time
 
         % Continuous-time state-space matrices
-        A % State matrix
-        B % Input matrix
-        E % Disturbance matrix
-        C % Output matrix
-        D % Feedthrough matrix
+        A  % State matrix
+        B  % Input matrix
+        E  % Disturbance matrix
+        C  % Output matrix
+        D  % Feedthrough matrix
 
         % Discrete-time state-space matrices
         Ad % State matrix
@@ -56,7 +56,7 @@ classdef DCMotor < handle
         Dd % Feedthrough matrix
 
         % Internal system states
-        x % State vector [omega; i]
+        x  % State vector [omega; i]
     end
 
     properties (Constant)
@@ -68,6 +68,9 @@ classdef DCMotor < handle
             %DCMOTOR Internal constructor for DC motor initialization.
             %   Creates and initializes a DC motor object using the
             %   provided physical parameters structure.
+            arguments
+                parameters struct
+            end
             
             % Mechanical properties
             obj.J  = parameters.J;
@@ -104,6 +107,50 @@ classdef DCMotor < handle
 
             % Build state-space model
             obj.BuildStateSpaceModel();
+        end
+
+        function options = LoadOptionsChecker(options)
+            %LOADOPTIONSCHECKER Validate and resolve load description.
+            
+            arguments
+                options struct
+            end
+
+            %Forwarded DC motor model verification
+            loadTorquePresent = options.loadTorque > 0;
+            rPresent = ~isnan(options.r);
+            mPresent = ~isnan(options.m);
+            FPresent = ~isnan(options.F);
+            hasLoadDescription = rPresent || mPresent || FPresent;
+
+            if hasLoadDescription
+
+                if loadTorquePresent
+                    error("MATLAB:badargs", ...
+                        "Use either loadTorque directly or describe the load using (F;r) or (m;r).")
+                elseif mPresent && FPresent
+                    error("MATLAB:badargs", "Use either force F or mass m, not both.")
+                elseif ~rPresent || ~(mPresent || FPresent)
+                    error("MATLAB:badargs", ...
+                        "Incomplete load description. Use either (F;r) or (m;r).");
+                elseif options.r <= 0
+                    error("DCMotor:InvalidRadius", "Radius r must be positive.")
+                elseif FPresent
+                    if options.F < 0
+                        error("MATLAB:badargs", "Force F must be nonnegative.");
+                    else
+                        options.loadTorque = options.F * options.r;
+                    end
+                else
+                    if options.m < 0
+                        error("MATLAB:badargs", "Mass m must be nonnegative.");  
+                    else
+                        options.F = options.m * DCMotor.g;
+                        options.loadTorque = options.F * options.r;
+                    end
+                end
+
+            end
         end
     end
 
@@ -171,43 +218,7 @@ classdef DCMotor < handle
                 options.loadTorque (1,1) double {mustBeNonnegative} = 0;
             end
 
-            %Forwarded DC motor model verification
-            loadTorquePresent = options.loadTorque > 0;
-            rPresent = ~isnan(options.r);
-            mPresent = ~isnan(options.m);
-            FPresent = ~isnan(options.F);
-            hasLoadDescription = rPresent || mPresent || FPresent;
-
-            if hasLoadDescription
-
-                if loadTorquePresent
-                    error("MATLAB:badargs", ...
-                        "Use either loadTorque directly or describe the load using (F;r) or (m;r).")
-                elseif mPresent && FPresent
-                    error("MATLAB:badargs", "Use either force F or mass m, not both.")
-                elseif ~rPresent || ~(mPresent || FPresent)
-                    error("MATLAB:badargs", ...
-                        "Incomplete load description. Use either (F;r) or (m;r).");
-                elseif options.r <= 0
-                    error("DCMotor:InvalidRadius", "Radius r must be positive.")
-                elseif FPresent
-                    if options.F < 0
-                        error("MATLAB:badargs", "Force F must be nonnegative.");
-                    else
-                        options.loadTorque = options.F * options.r;
-                    end
-                else
-                    if options.m < 0
-                        error("MATLAB:badargs", "Mass m must be nonnegative.");  
-                    else
-                        options.F = options.m * DCMotor.g;
-                        options.loadTorque = options.F * options.r;
-                    end
-                end
-                
-            end
-
-            parameters = options;
+            parameters = DCMotor.LoadOptionsChecker(options);
         end
         
         function obj = Create(options)
@@ -253,12 +264,102 @@ classdef DCMotor < handle
             obj.BuildStateSpaceModel;
         end
 
-        function omega = Step(obj, V, Ts)
+        function omega = Step(obj, V)
+            %STEP Advance DC motor simulation by one discrete time step.
+            %   Updates motor states using the discrete state-space model
+            %   and returns current angular velocity.
 
+            arguments
+                obj 
+                V (1,1) double % Input voltage
+            end
+
+            % State update: x[k+1] = Ad*x[k] + Bd*V[k] + Ed*τL[k]
+            obj.x = obj.Ad * obj.x + obj.Bd * V + obj.Ed * obj.loadTorque;
+
+            % Update object states
+            obj.omega = obj.x(1);
+            obj.i = obj.x(2);
+
+            % Update derived quantities
+            obj.alpha = (obj.Kt * obj.i - obj.b * obj.omega - obj.loadTorque) / obj.J;
+            obj.theta = obj.theta + obj.omega * obj.Ts;
+            obj.V = V;
+            obj.eb = obj.Ke * obj.omega;
+            obj.torque = obj.Kt * obj.i;
+
+            % System output
+            omega = obj.Cd * obj.x + obj.Dd * V;
         end
 
         function Reset(obj)
+            %RESET Reset DC motor dynamic states.
+            %   Restores all simulation states and outputs to zero.
+            arguments
+                obj 
+            end
+
+            % Dynamic states
+            obj.theta = 0;
+            obj.omega = 0;
+            obj.alpha = 0;
+            obj.i = 0;
+            obj.V = 0;
+            obj.eb = 0;
+
+            % Internal state vector
+            obj.x = [obj.omega; obj.i];
+        end
+
+        function x = GetState(obj)
+            %GETSTATE Return current DC motor state vector.
+            %   Returns internal state vector [omega; i].
+
+            arguments
+                obj 
+            end
+
+            x = obj.x;
+        end
+
+        function SetState(obj, omega, i)
+            %SETSTATE Set DC motor internal state values.
+            %   Updates angular velocity and armature current states.
+
+            arguments
+                obj 
+                omega (1,1) double % Angular velocity
+                i (1,1) double % Current
+            end
+
+            obj.omega = omega;
+            obj.i = i;
+
+            obj.x = [obj.omega; obj.i];
+
+            obj.eb = obj.Ke * obj.omega;
+            obj.torque = obj.Kt * obj.i;
+        end
         
+        function SetLoad(obj, options)
+            %SETLOAD Set external load disturbance.
+            %   Defines load using loadTorque, or calculates it from
+            %   force/radius or mass/radius.
+
+            arguments
+                obj 
+                options.loadTorque (1,1) double {mustBeNonnegative} = 0 % Load torque disturbance
+                options.F (1,1) double = NaN;
+                options.m (1,1) double = NaN;
+                options.r (1,1) double = NaN;
+            end
+
+            options = DCMotor.LoadOptionsChecker(options);
+
+            obj.loadTorque = options.loadTorque;
+            obj.F = options.F;
+            obj.m = options.m;
+            obj.r = options.r;
         end
     end
 end
