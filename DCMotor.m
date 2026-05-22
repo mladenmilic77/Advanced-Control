@@ -183,9 +183,23 @@ classdef DCMotor < handle
             obj.C = [1 0];
             obj.D = [0 0];
 
+            % Controllability and Observability checks;
+            n = size(obj.A, 1);
+            
+            if rank(ctrb(obj.A, obj.B)) < n
+                warning("MATLAB:rankDeficientMatrix", ...
+                    "DC motor model is not fully controllable with current parameters.");
+            end
+            
+            if rank(obsv(obj.A, obj.C)) < n
+                warning("DCMotor:NotObservable", ...
+                    "DC motor model is not fully observable from selected output.");
+            end
+
             sysc = ss(obj.A, [obj.B obj.E], obj.C, obj.D);
             sysd = c2d(sysc,obj.Ts,"zoh");
 
+            % Discrete model
             obj.Ad = sysd.A;
             obj.Bd = sysd.B(:,1);
             obj.Ed = sysd.B(:,2);
@@ -221,31 +235,21 @@ classdef DCMotor < handle
             parameters = DCMotor.LoadOptionsChecker(options);
         end
         
-        function obj = Create(options)
+        function obj = Create(varargin)
             %CREATE Create and initialize a DC motor object.
             %   Constructs a DC motor model using validated physical
             %   parameters provided through name-value arguments.
 
-            arguments
-                % Mechanical parameters
-                options.J (1,1) double;
-                options.b (1,1) double;
-                options.Kt (1,1) double;
-
-                % Electrical parameters
-                options.R (1,1) double;
-                options.L (1,1) double;
-                options.Ke (1,1) double;
-
-                % Optional load parameters
-                options.r (1,1) double;
-                options.m (1,1) double;
-                options.F (1,1) double;
-                options.loadTorque (1,1) double;
+            if nargin == 0
+                parameters = DCMotor.Parameters();
+            elseif nargin == 1 && isstruct(varargin{1})
+                args = namedargs2cell(varargin{:});
+                parameters = DCMotor.Parameters(args{:});
+            else
+                parameters = DCMotor.Parameters(varargin{:});
             end
 
-            args = namedargs2cell(options);
-            obj = DCMotor(DCMotor.Parameters(args{:}));
+            obj = DCMotor(parameters);
         end
     end
 
