@@ -39,7 +39,7 @@ classdef PWM < handle
         end
     end
 
-    methods (Static)
+    methods (Access = public, Static)
         function obj = Create(options)
             %CREATE Create and initialize PWM object.
             %   Constructs PWM model using supply voltage, switching
@@ -55,7 +55,7 @@ classdef PWM < handle
         end
     end
 
-    methods
+    methods (Access = public)
         function voltage = Step(obj, dutyCycle, Ts)
             %STEP Advance PWM model by one simulation step.
             %   Converts duty cycle into output voltage according to the
