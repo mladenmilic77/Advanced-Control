@@ -183,19 +183,11 @@ classdef DCMotor < handle
             obj.C = [1 0];
             obj.D = [0 0];
 
-            % Controllability and Observability checks;
-            n = size(obj.A, 1);
-            
-            if rank(ctrb(obj.A, obj.B)) < n
-                warning("MATLAB:rankDeficientMatrix", ...
-                    "DC motor model is not fully controllable with current parameters.");
-            end
-            
-            if rank(obsv(obj.A, obj.C)) < n
-                warning("DCMotor:NotObservable", ...
-                    "DC motor model is not fully observable from selected output.");
-            end
+            % Controllability and Observability checks
+            ControlTheory.ValidateControllability(obj.A, obj.B);
+            ControlTheory.ValidateObservability(obj.A, obj.C);
 
+            % Transformation
             sysc = ss(obj.A, [obj.B obj.E], obj.C, obj.D);
             sysd = c2d(sysc,obj.Ts,"zoh");
 

@@ -1,6 +1,6 @@
 classdef ARXLSIdentifier < handle
-    %UNTITLED Summary of this class goes here
-    %   Detailed explanation goes here
+    %ARXLSIDENTIFIER ARX model parameter estimation using Least Squares.
+    % Identifies discrete-time system models from input-output data.
 
     properties (Access = public)
         na     % Number of output regressors
