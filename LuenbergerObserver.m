@@ -14,6 +14,10 @@ classdef LuenbergerObserver < handle
         xHat % Estimated states
         yHat % Estimated output
         error % y - yHat
+        dHat % Estimated disturbance
+        nx % Number of states
+        ny % Number of outputs
+        nd % Number of disturbance states
     end
 
     methods (Access = private, Static)
@@ -24,18 +28,69 @@ classdef LuenbergerObserver < handle
                 params struct % Observer parameters
             end
 
-            obj.A = params.A;
-            obj.B = params.B;
-            obj.C = params.C;
-            obj.L = params.L;
+            obj.nx = size(params.A, 1);
+            obj.ny = size(params.C, 1);
+            obj.nd = size(params.Ad, 1);
             obj.Ts = params.Ts;
 
-            nx = size(obj.A, 1);
-            ny = size(obj.C, 1);
+            obj.A = [params.A, params.Bd; zeros(obj.nd, obj.nx), params.Ad];
+            obj.B = [params.B; zeros(obj.nd, size(params.B, 2))];
+            obj.C = [params.C, zeros(obj.ny, obj.nd)];
+            obj.L = params.L;
 
-            obj.xHat = zeros(nx, 1);
-            obj.yHat = zeros(ny, 1);
-            obj.error = zeros(ny, 1);
+            n_total = obj.nx + obj.nd;
+            obj.xHat = zeros(n_total, 1);
+            obj.yHat = zeros(obj.ny, 1);
+            obj.error = zeros(obj.ny, 1);
+            obj.dHat = zeros(obj.nd, 1);
+        end
+
+        function [Ad, Bd_expanded] = ComputeDisturbanceDynamics(type, Bd, Ts, Freq, nx)
+            %COMPUTEDISTURBANCEDYNAMICS Generates the discrete-time state-space transition
+            % matrices for the selected disturbance model.
+            
+            arguments
+                type string
+                Bd (:,:) double
+                Ts (1,1) double
+                Freq (1,1) double
+                nx (1,1) double
+            end
+
+            nd_inputs = size(Bd, 2);
+
+            switch lower(type)
+                case "constant"
+                    % d(k+1)=d(k)
+                    Ad=eye(nd_inputs);
+                    Bd_expanded = Bd;
+                case "ramp"
+                    % d(k+1) = d(k) + Ts*v(k)
+                    % v(k+1) = v(k)
+                    Ad_single = [1, Ts; 0, 1];
+                    Ad = blkdiag(Ad_single); % Fallback
+                    
+                    if nd_inputs > 1
+                        Ad_cells = repmat({Ad_single}, 1, nd_inputs);
+                        Ad = blkdiag(Ad_cells{:});
+                    end
+
+                    % Scaling Bd
+                    Bd_expanded = zeros(nx,nd_inputs * 2);
+                    Bd_expanded(:, 1:2:end) = Bd;
+                case "sinusoidal"
+                    omega = 2 * pi * Freq;
+                    Ad_single = [cos(omega * Ts),  sin(omega * Ts); -sin(omega * Ts), cos(omega * Ts)];
+                    Ad = blkdiag(Ad_single); % Fallback
+
+                    if nd_inputs > 1
+                        Ad_cells = repmat({Ad_single}, 1, nd_inputs);
+                        Ad = blkdiag(Ad_cells{:});
+                    end
+                    
+                    Bd_expanded = zeros(nx, nd_inputs * 2);
+                    Bd_expanded(:, 1:2:end) = Bd;
+            end
         end
     end
 
@@ -47,22 +102,41 @@ classdef LuenbergerObserver < handle
                 params.A (:,:) double {mustBeFinite, mustBeReal}
                 params.B (:,:) double {mustBeFinite, mustBeReal}
                 params.C (:,:) double {mustBeFinite, mustBeReal}
+                params.Bd (:,:) double {mustBeFinite, mustBeReal}
                 params.ObserverPoles (:,1) double {mustBeFinite, mustBeReal}
                 params.Ts (1,1) double {mustBePositive, mustBeFinite}
+
+                % Disturbance configuration parameters
+                params.DisturbanceType (1,1) string {mustBeMember(params.DisturbanceType, ["constant","ramp","sinusoidal"])} = "constant"
+                params.DisturbanceFrequency (1,1) double {mustBeReal,mustBeFinite} = 0
             end
 
-            ControlTheory.ValidateStateSpaceMatrices(params.A, ...
-            params.B, params.C);
+            if size(params.Bd,1) ~= size(params.A,1)
+                error("MATLAB:sizeDimensionsMustMatch", ...
+                    "Bd must have same number of rows as A.");
+            end
 
-            ControlTheory.ValidateObservability(params.A, params.C);
+            params.nx = size(params.A, 1);
 
-            ControlTheory.ValidatePoleCount(params.A, params.ObserverPoles);
+            [params.Ad, params.Bd] = LuenbergerObserver.ComputeDisturbanceDynamics( ...
+                params.DisturbanceType, params.Bd, params.Ts, params.DisturbanceFrequency, params.nx);
 
-            params.L = place(params.A', params.C', params.ObserverPoles)';
+            n_dist = size(params.Ad, 1);
+            A_aug = [params.A, params.Bd; zeros(n_dist, params.nx),  params.Ad];
+            C_aug = [params.C, zeros(size(params.C,1), n_dist)];
+            B_aug = [params.B; zeros(n_dist, size(params.B,2))];
 
-            ControlTheory.ValidateObserverMatrices(params.A, ...
-            params.C, params.L);
+            ControlTheory.ValidateStateSpaceMatrices(A_aug, B_aug, C_aug);
 
+            ControlTheory.ValidateObservability(A_aug, C_aug);
+
+            ControlTheory.ValidatePoleCount(A_aug, params.ObserverPoles);
+
+            params.L = place(A_aug', C_aug', params.ObserverPoles)';
+
+            ControlTheory.ValidateObserverMatrices(A_aug, C_aug, params.L);
+
+            % Not great need some fixing here disturbance part made a mess
             obj = LuenbergerObserver(params);
         end
     end
@@ -76,31 +150,40 @@ classdef LuenbergerObserver < handle
                 obj 
             end
 
-            nx = size(obj.A, 1);
-            ny = size(obj.C, 1);
+            n_total = obj.nx + obj.nd;
 
-            obj.xHat = zeros(nx, 1);
-            obj.yHat = zeros(ny, 1);
-            obj.error = zeros(ny, 1);
+            obj.xHat = zeros(n_total, 1);
+            obj.yHat = zeros(obj.ny, 1);
+            obj.error = zeros(obj.ny, 1);
+            obj.dHat = zeros(obj.nd, 1);
         end
 
-        function Initialize(obj, x0)
+        function Initialize(obj, x0, d0)
             %INITIALIZE Initialize observer state estimates.
             % Sets the initial state estimate and updates the estimated output.
 
             arguments
                 obj 
                 x0 (:, 1) double {mustBeFinite, mustBeReal} % Initial state
+                d0 (:, 1) double {mustBeFinite, mustBeReal} = [] % Disturbance Initial state
             end
 
-            if numel(x0) ~= size(obj.A,1)
+            if numel(x0) ~= obj.nx
                 error("MATLAB:sizeDimensionsMustMatch", ...
                     "Initial state estimate must have the same number of elements as system states."); %#ok<CPROP>
             end
 
-            obj.xHat = x0;
+            if isempty(d0)
+                d0 = zeros(obj.nd, 1);
+            elseif numel(d0) ~= obj.nd
+                error("MATLAB:sizeDimensionsMustMatch", ...
+                    "Initial disturbance vector must match configured disturbance state size."); %#ok<CPROP>
+            end
+
+            obj.xHat = [x0; d0];
             obj.yHat = obj.C * obj.xHat;
-            obj.error = zeros(size(obj.C, 1), 1);
+            obj.error = zeros(obj.ny, 1);
+            obj.dHat = d0;
         end
 
         function xHat = Step(obj, u, y)
@@ -118,7 +201,7 @@ classdef LuenbergerObserver < handle
                     "Input vector u must have same number of rows as input matrix B has columns."); %#ok<CPROP>
             end
 
-            if numel(y) ~= size(obj.C, 1)
+            if numel(y) ~= obj.ny
                 error("MATLAB:sizeDimensionsMustMatch", ...
                     "Output vector y must have same number of rows as output matrix C has rows."); %#ok<CPROP>
             end
@@ -127,7 +210,18 @@ classdef LuenbergerObserver < handle
             obj.xHat = obj.A * obj.xHat + obj.B * u + obj.L * obj.error;
             obj.yHat = obj.C * obj.xHat;
 
-            xHat = obj.xHat;
+            xHat = obj.xHat(1:obj.nx);
+            obj.dHat = obj.xHat(obj.nx+1:end);
+        end
+
+        function dHat = GetDisturbance(obj)
+            %
+
+            arguments
+                obj 
+            end
+
+            dHat = obj.dHat;
         end
 
         function SetPoles(obj, poles)
