@@ -156,5 +156,29 @@ classdef ARXLSIdentifier < handle
 
             error = obj.error;
         end
+
+        function [A, B, C, D] = GetStateSpaceModel(obj)
+            %GETSTATESPACEMODEL Convert identified ARX model to state-space form.
+
+            arguments
+                obj
+            end
+
+            theta = obj.theta;
+
+            a = theta(1:obj.na);
+            b = theta(obj.na+1:end);
+
+            den = [1; a(:)];
+            num = [0; b(:)];
+
+            % Make numerator and denominator same length
+            n = max(length(den), length(num));
+
+            den = [den; zeros(n - length(den), 1)];
+            num = [num; zeros(n - length(num), 1)];
+
+            [A, B, C, D] = tf2ss(num', den');
+        end
     end
 end
